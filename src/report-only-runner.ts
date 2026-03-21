@@ -1,13 +1,12 @@
-import type { AIClient } from './ai-client.js'
 import type { CacheManager } from './cache-manager.js'
 import { LinterEngine } from './linter-engine.js'
 import { createEmptySummary, suppressConsoleOutput, writeReportOnlyReport } from './report-only.js'
 import type { RuleMatcher } from './rule-matcher.js'
-import type { LinterConfig } from './types.js'
+import type { LintClient, LinterConfig } from './types.js'
 
 interface ReportOnlyRunnerDeps {
   cache: CacheManager
-  client: AIClient
+  client: LintClient
   matcher: RuleMatcher
 }
 

@@ -1,9 +1,8 @@
 import { readFileSync } from 'node:fs'
 import pLimit from 'p-limit'
-import type { AIClient } from './ai-client.js'
 import { CacheManager } from './cache-manager.js'
 import type { RuleMatcher } from './rule-matcher.js'
-import type { LinterConfig, LintJob, LintResult, LintSummary } from './types.js'
+import type { LintClient, LinterConfig, LintJob, LintResult, LintSummary } from './types.js'
 
 export interface Reporter {
   report(results: LintResult[], summary: LintSummary): void
@@ -18,7 +17,7 @@ export type ProgressCallback = (
 
 interface LinterEngineDeps {
   cache: CacheManager
-  client: AIClient
+  client: LintClient
   matcher: RuleMatcher
   reporter: Reporter
   onProgress?: ProgressCallback

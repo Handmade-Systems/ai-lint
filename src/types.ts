@@ -1,6 +1,6 @@
 // --- Config Types ---
 
-export type Provider = 'openrouter' | 'ollama'
+export type Provider = 'openrouter' | 'ollama' | 'claude-code'
 export type OpenRouterModel = 'gemini-flash' | 'haiku' | 'sonnet' | 'opus'
 export type Model = OpenRouterModel | (string & {})
 export type Severity = 'error' | 'warning'
@@ -22,6 +22,13 @@ export interface LintRule {
   exclude?: string // exclude pattern
   prompt: string // AI prompt for this rule
   model?: Model // override default model
+  enabled?: boolean // default: true
+}
+
+// --- Client Interface ---
+
+export interface LintClient {
+  lint(job: LintJob): Promise<LintResult>
 }
 
 // --- Execution Types ---

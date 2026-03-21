@@ -7,7 +7,7 @@
   "properties": {
     "provider": {
       "type": "string",
-      "enum": ["openrouter", "ollama"],
+      "enum": ["openrouter", "ollama", "claude-code"],
       "description": "AI provider to use for linting"
     },
     "provider_url": {
@@ -77,6 +77,11 @@
           "type": "string",
           "minLength": 1,
           "description": "Override default model for this rule"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether this rule is active (default: true)"
         }
       },
       "required": ["id", "name", "severity", "glob", "prompt"]

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AIClient } from './ai-client.js'
 import { CacheManager } from './cache-manager.js'
+import { ClaudeCodeClient } from './claude-code-client.js'
 import { ConfigLoader } from './config-loader.js'
 import { LinterEngine } from './linter-engine.js'
 import { runReportOnlyLint } from './report-only-runner.js'
@@ -26,6 +27,12 @@ vi.mock('@openrouter/ai-sdk-provider', () => ({
 
 vi.mock('@ai-sdk/openai-compatible', () => ({
   createOpenAICompatible: vi.fn(() => vi.fn((modelName: string) => ({ modelId: modelName }))),
+}))
+
+// Mock child_process for claude-code tests
+const mockExecFile = vi.fn()
+vi.mock('node:child_process', () => ({
+  execFile: (...args: unknown[]) => mockExecFile(...args),
 }))
 
 describe('E2E Tests — Full Workflow', () => {
@@ -504,5 +511,232 @@ rules:
     expect(results.length).toBe(1) // Only file1.ts matched
     expect(results[0].file).toContain('file1.ts')
     expect(mockGenerateText).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('E2E Tests — Claude Code Provider', () => {
+  let tempDir: string
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'ai-lint-e2e-claude-code-'))
+    mockExecFile.mockClear()
+  })
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true })
+    vi.clearAllMocks()
+  })
+
+  function writeConfig(overrides: Record<string, unknown> = {}, rules: unknown[] = []) {
+    const ruleList =
+      rules.length > 0
+        ? rules
+        : [
+            {
+              id: 'no_console',
+              name: 'No console.log',
+              severity: 'error',
+              glob: '**/*.ts',
+              prompt: 'Check for console.log statements',
+            },
+          ]
+
+    writeFileSync(
+      join(tempDir, '.ai-lint.yml'),
+      `provider: claude-code
+${overrides.model ? `model: ${overrides.model}` : ''}
+${overrides.concurrency ? `concurrency: ${overrides.concurrency}` : ''}
+git_base: main
+rules:
+${(
+  ruleList as Array<{
+    id: string
+    name: string
+    severity: string
+    glob: string
+    prompt: string
+    model?: string
+  }>
+)
+  .map(
+    (r) => `  - id: ${r.id}
+    name: "${r.name}"
+    severity: ${r.severity}
+    glob: "${r.glob}"
+    prompt: |
+      ${r.prompt}${r.model ? `\n    model: ${r.model}` : ''}`,
+  )
+  .join('\n')}`,
+    )
+  }
+
+  function writeFile(relativePath: string, content: string) {
+    writeFileSync(join(tempDir, relativePath), content)
+  }
+
+  function simulateClaude(
+    responses: Array<{ pass: boolean; message: string; line: number | null }>,
+  ) {
+    let callIndex = 0
+    mockExecFile.mockImplementation(
+      (
+        _cmd: string,
+        _args: string[],
+        _opts: unknown,
+        callback: (err: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        const response = responses[callIndex++] ?? responses[responses.length - 1]
+        callback(
+          null,
+          JSON.stringify({
+            session_id: `session-${callIndex}`,
+            structured_output: response,
+          }),
+          '',
+        )
+        return { stdin: { end: vi.fn() } }
+      },
+    )
+  }
+
+  async function runLinterWithClaudeCode(files: string[]) {
+    const config = new ConfigLoader().load(join(tempDir, '.ai-lint.yml'))
+    const cache = new CacheManager(join(tempDir, '.ai-lint'))
+    const client = new ClaudeCodeClient({
+      model: config.model !== 'gemini-flash' ? config.model : undefined,
+    })
+    const matcher = new RuleMatcher(config.rules)
+    const reporter = new Reporter()
+    const engine = new LinterEngine({ cache, client, matcher, reporter })
+
+    return engine.run(files, config)
+  }
+
+  it('should run full lint with claude-code provider — pass result', async () => {
+    writeConfig()
+    writeFile('file1.ts', 'const x = 1;\n')
+
+    simulateClaude([{ pass: true, message: 'No console.log found', line: null }])
+
+    const { results, summary, exitCode } = await runLinterWithClaudeCode([
+      join(tempDir, 'file1.ts'),
+    ])
+
+    expect(results).toHaveLength(1)
+    expect(results[0].pass).toBe(true)
+    expect(results[0].rule_id).toBe('no_console')
+    expect(results[0].cached).toBe(false)
+    expect(summary.passed).toBe(1)
+    expect(summary.errors).toBe(0)
+    expect(exitCode).toBe(0)
+  })
+
+  it('should run full lint with claude-code provider — fail result', async () => {
+    writeConfig()
+    writeFile('file1.ts', "console.log('hello');\n")
+
+    simulateClaude([{ pass: false, message: 'Found console.log on line 1', line: 1 }])
+
+    const { results, summary, exitCode } = await runLinterWithClaudeCode([
+      join(tempDir, 'file1.ts'),
+    ])
+
+    expect(results).toHaveLength(1)
+    expect(results[0].pass).toBe(false)
+    expect(results[0].message).toBe('Found console.log on line 1')
+    expect(results[0].line).toBe(1)
+    expect(summary.errors).toBe(1)
+    expect(exitCode).toBe(1)
+  })
+
+  it('should handle multiple files and rules with claude-code provider', async () => {
+    writeConfig({}, [
+      {
+        id: 'no_console',
+        name: 'No console.log',
+        severity: 'error',
+        glob: '**/*.ts',
+        prompt: 'Check for console.log statements',
+      },
+      {
+        id: 'max_length',
+        name: 'Max 100 lines',
+        severity: 'warning',
+        glob: '**/*.ts',
+        prompt: 'Check if file exceeds 100 lines',
+      },
+    ])
+
+    writeFile('file1.ts', "console.log('test');\n")
+    writeFile('file2.ts', 'const x = 1;\n')
+
+    simulateClaude([
+      { pass: false, message: 'Found console.log', line: 1 },
+      { pass: true, message: 'File is short', line: null },
+      { pass: true, message: 'No console.log', line: null },
+      { pass: true, message: 'File is short', line: null },
+    ])
+
+    const { results, summary } = await runLinterWithClaudeCode([
+      join(tempDir, 'file1.ts'),
+      join(tempDir, 'file2.ts'),
+    ])
+
+    expect(results).toHaveLength(4) // 2 files × 2 rules
+    expect(summary.errors).toBe(1)
+    expect(summary.passed).toBe(3)
+    expect(mockExecFile).toHaveBeenCalledTimes(4)
+  })
+
+  it('should use cache on second run with claude-code provider', async () => {
+    writeConfig()
+    writeFile('file1.ts', 'const x = 1;\n')
+
+    simulateClaude([{ pass: true, message: 'No console.log found', line: null }])
+
+    // First run
+    await runLinterWithClaudeCode([join(tempDir, 'file1.ts')])
+    expect(mockExecFile).toHaveBeenCalledTimes(1)
+
+    // Second run — should use cache
+    mockExecFile.mockClear()
+    const { results } = await runLinterWithClaudeCode([join(tempDir, 'file1.ts')])
+
+    expect(mockExecFile).toHaveBeenCalledTimes(0) // No CLI calls
+    expect(results).toHaveLength(1)
+    expect(results[0].cached).toBe(true)
+  })
+
+  it('should handle CLI failure gracefully', async () => {
+    writeConfig()
+    writeFile('file1.ts', 'const x = 1;\n')
+
+    mockExecFile.mockImplementation(
+      (
+        _cmd: string,
+        _args: string[],
+        _opts: unknown,
+        callback: (err: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        callback(new Error('CLI crashed'), '', 'CLI crashed')
+        return { stdin: { end: vi.fn() } }
+      },
+    )
+
+    const { results, exitCode } = await runLinterWithClaudeCode([join(tempDir, 'file1.ts')])
+
+    expect(results).toHaveLength(1)
+    expect(results[0].pass).toBe(false)
+    expect(results[0].api_error).toBe(true)
+    expect(exitCode).toBe(1)
+  })
+
+  it('should load claude-code config correctly', () => {
+    writeConfig({ model: 'sonnet' })
+    const config = new ConfigLoader().load(join(tempDir, '.ai-lint.yml'))
+
+    expect(config.provider).toBe('claude-code')
+    expect(config.model).toBe('sonnet')
+    expect(config.concurrency).toBe(1)
   })
 })

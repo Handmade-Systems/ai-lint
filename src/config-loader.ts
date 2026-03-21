@@ -56,21 +56,26 @@ export class ConfigLoader {
       throw new Error('Config validation failed:\n  - /model: is required when provider is ollama')
     }
 
+    // claude-code provider: model is optional (uses CLI default)
+    // No API key or URL needed
+
+    const defaultConcurrency = provider === 'ollama' || provider === 'claude-code' ? 1 : 5
+
     const config: LinterConfig = {
       provider: provider as LinterConfig['provider'],
       provider_url:
         (raw.provider_url as string | undefined) ??
         (provider === 'ollama' ? 'http://localhost:11434/v1' : undefined),
       model: (raw.model as LinterConfig['model']) ?? 'gemini-flash',
-      concurrency: (raw.concurrency as number) ?? (provider === 'ollama' ? 1 : 5),
+      concurrency: (raw.concurrency as number) ?? defaultConcurrency,
       git_base: (raw.git_base as string) ?? 'main',
-      rules: raw.rules as LinterConfig['rules'],
+      rules: (raw.rules as LinterConfig['rules']).filter((r) => r.enabled !== false),
     }
 
     // Validate unique rule IDs (custom validation not in schema)
     this.validateUniqueRuleIds(config.rules)
 
-    // Validate model names for openrouter provider
+    // Validate model names for openrouter provider (skip for ollama and claude-code)
     if (provider === 'openrouter') {
       this.validateOpenRouterModels(config)
     }

@@ -311,6 +311,83 @@ rules:
     }
   })
 
+  test('15. claude-code provider accepted with default model', () => {
+    const tmpPath = path.join(testDataDir, 'claude-code-config.yml')
+    fs.writeFileSync(
+      tmpPath,
+      `
+provider: claude-code
+rules:
+  - id: test_rule
+    name: "Test Rule"
+    severity: error
+    glob: "**/*.ts"
+    prompt: "Test prompt"
+`,
+    )
+
+    try {
+      const config = loader.load(tmpPath)
+      expect(config.provider).toBe('claude-code')
+      expect(config.model).toBe('gemini-flash') // default, ignored by claude-code
+      expect(config.concurrency).toBe(1)
+      expect(config.provider_url).toBeUndefined()
+    } finally {
+      fs.unlinkSync(tmpPath)
+    }
+  })
+
+  test('16. claude-code provider with explicit model', () => {
+    const tmpPath = path.join(testDataDir, 'claude-code-model.yml')
+    fs.writeFileSync(
+      tmpPath,
+      `
+provider: claude-code
+model: opus
+rules:
+  - id: test_rule
+    name: "Test Rule"
+    severity: error
+    glob: "**/*.ts"
+    prompt: "Test prompt"
+`,
+    )
+
+    try {
+      const config = loader.load(tmpPath)
+      expect(config.provider).toBe('claude-code')
+      expect(config.model).toBe('opus')
+    } finally {
+      fs.unlinkSync(tmpPath)
+    }
+  })
+
+  test('17. claude-code provider allows any model name (no validation)', () => {
+    const tmpPath = path.join(testDataDir, 'claude-code-any-model.yml')
+    fs.writeFileSync(
+      tmpPath,
+      `
+provider: claude-code
+model: claude-sonnet-4-6
+rules:
+  - id: test_rule
+    name: "Test Rule"
+    severity: error
+    glob: "**/*.ts"
+    prompt: "Test prompt"
+    model: claude-opus-4-6
+`,
+    )
+
+    try {
+      const config = loader.load(tmpPath)
+      expect(config.model).toBe('claude-sonnet-4-6')
+      expect(config.rules[0].model).toBe('claude-opus-4-6')
+    } finally {
+      fs.unlinkSync(tmpPath)
+    }
+  })
+
   test('14. Per-rule model validated for openrouter', () => {
     const tmpPath = path.join(testDataDir, 'openrouter-bad-rule-model.yml')
     fs.writeFileSync(

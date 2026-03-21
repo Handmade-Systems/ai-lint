@@ -6,6 +6,7 @@ import { Command } from 'commander'
 import dotenv from 'dotenv'
 import { AIClient } from './ai-client'
 import { CacheManager } from './cache-manager.js'
+import { ClaudeCodeClient } from './claude-code-client'
 import { ConfigLoader } from './config-loader'
 import { FileResolver } from './file-resolver'
 import { runGenerateRuleFlow } from './generate-rule-flow'
@@ -15,6 +16,7 @@ import { runReportOnlyLint } from './report-only-runner.js'
 import { Reporter } from './reporter'
 import { RuleGenerator } from './rule-generator'
 import { RuleMatcher } from './rule-matcher'
+import type { LintClient } from './types'
 
 dotenv.config({ quiet: true })
 
@@ -73,6 +75,20 @@ program
         process.exit(2)
       }
 
+      // Helper to create the appropriate lint client
+      const createClient = (): LintClient => {
+        if (config.provider === 'claude-code') {
+          return new ClaudeCodeClient({
+            model: config.model !== 'gemini-flash' ? config.model : undefined,
+          })
+        }
+        return new AIClient({
+          provider: config.provider,
+          providerUrl: config.provider_url,
+          defaultModel: config.model,
+        })
+      }
+
       // 3. Prepare cache
       const cache = new CacheManager('.ai-lint')
 
@@ -111,11 +127,7 @@ program
             reportFile,
             deps: {
               cache,
-              client: new AIClient({
-                provider: config.provider,
-                providerUrl: config.provider_url,
-                defaultModel: config.model,
-              }),
+              client: createClient(),
               matcher: new RuleMatcher(config.rules),
             },
           })
@@ -126,11 +138,7 @@ program
       }
 
       // 5. Create dependencies
-      const client = new AIClient({
-        provider: config.provider,
-        providerUrl: config.provider_url,
-        defaultModel: config.model,
-      })
+      const client = createClient()
       const matcher = new RuleMatcher(config.rules)
 
       if (reportOnly) {
@@ -138,7 +146,7 @@ program
           filesToLint,
           config,
           reportFile,
-          deps: { cache, client, matcher },
+          deps: { cache, client: createClient(), matcher },
         })
         process.exit(exitCode)
       }
@@ -146,9 +154,11 @@ program
       const reporter = new Reporter()
 
       const providerInfo =
-        config.provider === 'ollama'
-          ? `provider: ollama @ ${config.provider_url}`
-          : `provider: openrouter`
+        config.provider === 'claude-code'
+          ? 'provider: claude-code'
+          : config.provider === 'ollama'
+            ? `provider: ollama @ ${config.provider_url}`
+            : 'provider: openrouter'
       console.log(
         `Linting ${filesToLint.length} files against ${config.rules.length} rules (${providerInfo}, model: ${config.model})...\n`,
       )
